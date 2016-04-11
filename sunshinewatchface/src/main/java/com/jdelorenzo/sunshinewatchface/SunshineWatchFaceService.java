@@ -21,6 +21,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.Resources;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -38,6 +40,7 @@ import android.view.WindowInsets;
 
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
+import com.google.android.gms.wearable.Asset;
 import com.google.android.gms.wearable.DataApi;
 import com.google.android.gms.wearable.DataEvent;
 import com.google.android.gms.wearable.DataEventBuffer;
@@ -46,6 +49,7 @@ import com.google.android.gms.wearable.DataMap;
 import com.google.android.gms.wearable.DataMapItem;
 import com.google.android.gms.wearable.Wearable;
 
+import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.util.Calendar;
 import java.util.Date;
@@ -65,6 +69,7 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
      * displayed in interactive mode.
      */
     private static final long INTERACTIVE_UPDATE_RATE_MS = TimeUnit.SECONDS.toMillis(1);
+    private static final long TIMEOUT_MS = TimeUnit.SECONDS.toMillis(10);
     public static final String LOG_TAG = "SunshineWatchFace";
 
     /**
@@ -124,7 +129,15 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
         float mWeatherYOffset;
         float mLineHeight;
         Boolean weatherChanged;
-        String mWeatherString;
+        String mWeatherString = "SUNNY";
+        String high = "12";
+        String low = "5";
+        Bitmap weatherIcon;
+
+        private static final String DESC = "com.example.android.sunshine.app.desc";
+        private static final String HIGH = "com.example.android.sunshine.app.high";
+        private static final String LOW = "com.example.android.sunshine.app.low";
+        private static final String ICON = "com.example.android.sunshine.app.icon";
 
         GoogleApiClient mGoogleApiClient = new GoogleApiClient.Builder(SunshineWatchFaceService.this)
                 .addConnectionCallbacks(this)
@@ -294,18 +307,25 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
 
             // Draw H:MM in ambient mode or H:MM:SS in interactive mode.
             mTime.setToNow();
-            String text = mAmbient
-                    ? String.format("%d:%02d", mTime.hour, mTime.minute)
-                    : String.format("%d:%02d:%02d", mTime.hour, mTime.minute, mTime.second);
-            canvas.drawText(text, mXOffset, mYOffset, mTextPaint);
-            canvas.drawText("Sunny", mXOffset, mYOffset + mLineHeight, mTextPaint);
-            canvas.drawText("Sunny", mXOffset+1, mYOffset, mTextPaint);
+            String text = String.format("%d:%02d", mTime.hour, mTime.minute);
+            canvas.drawText(text, mXOffset+30, mYOffset, mTextPaint);
 
-            //only draw the day of the week if there is no peek card and the weather has changed
-            if (weatherChanged && getPeekCardPosition().isEmpty()) {
-                canvas.drawText("Sunny", mXOffset, mYOffset + mLineHeight, mTextPaint);
-                weatherChanged = false;
+
+            if (mWeatherString == null) {
+                mWeatherString = "sunny";
+                high = "12";
+                low = "5";
             }
+            //only draw the day of the week if there is no peek card and the weather has changed
+            //if (weatherChanged && getPeekCardPosition().isEmpty()) {
+            weatherChanged = false;
+            canvas.drawText(mWeatherString, mXOffset, mYOffset + mLineHeight, mTextPaint);
+            if (weatherIcon != null) {
+                canvas.drawBitmap(weatherIcon, mXOffset, mYOffset + mLineHeight, mTextPaint);
+            }
+            canvas.drawText(high, mXOffset+100, mYOffset + mLineHeight*2, mTextPaint);
+            canvas.drawText(low, mXOffset+50, mYOffset + mLineHeight*2, mTextPaint);
+            //}
         }
 
         /**
@@ -353,14 +373,19 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
 
         @Override
         public void onDataChanged(DataEventBuffer dataEventBuffer) {
+            Log.e(LOG_TAG, "data changed");
             for (DataEvent dataEvent : dataEventBuffer) {
                 if (dataEvent.getType() != DataEvent.TYPE_CHANGED) {
                     continue;
                 }
-
-                DataItem dataItem = dataEvent.getDataItem();
-                DataMapItem dataMapItem = DataMapItem.fromDataItem(dataItem);
-                DataMap config = dataMapItem.getDataMap();
+                if (dataEvent.getDataItem().getUri().getPath().equals("/weather")) {
+                    DataMapItem dataMapItem = DataMapItem.fromDataItem(dataEvent.getDataItem());
+                    Asset iconAsset = dataMapItem.getDataMap().getAsset(ICON);
+                    weatherIcon = loadBitmapFromAsset(iconAsset);
+                    high = dataMapItem.getDataMap().getString(HIGH);
+                    low = dataMapItem.getDataMap().getString(LOW);
+                    mWeatherString = dataMapItem.getDataMap().getString(DESC);
+                }
             }
         }
 
@@ -390,6 +415,28 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
         @Override
         public void onConnectionFailed(ConnectionResult connectionResult) {
             Log.d(LOG_TAG, "onConnectionFailed: " + connectionResult);
+        }
+
+        public Bitmap loadBitmapFromAsset(Asset asset) {
+            if (asset == null) {
+                Log.e(LOG_TAG, "Error:  asset is null");
+                return  null;
+            }
+            ConnectionResult result = mGoogleApiClient.blockingConnect(TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            if (!result.isSuccess()) {
+                Log.w(LOG_TAG, "Connection result failed");
+                return null;
+            }
+            InputStream assetInputStream = Wearable.DataApi.getFdForAsset(
+                    mGoogleApiClient, asset).await().getInputStream();
+            mGoogleApiClient.disconnect();
+
+            if (assetInputStream == null) {
+                Log.w(LOG_TAG, "Requested an unknown asset");
+                return null;
+            }
+
+            return BitmapFactory.decodeStream(assetInputStream);
         }
     }
 }
