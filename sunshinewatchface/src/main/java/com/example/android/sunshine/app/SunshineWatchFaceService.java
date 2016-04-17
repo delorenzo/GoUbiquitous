@@ -28,6 +28,7 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
@@ -117,7 +118,6 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
         Paint mHighTextPaint;
         boolean mAmbient;
         Calendar mCalendar;
-        Date mDate;
         SimpleDateFormat mDateFormat;
         final Typeface BOLD_TYPEFACE =
                 Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD);
@@ -141,9 +141,9 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
         float mLineHeight;
         float mHighXOffset;
         float mLowXOffset;
-        String mWeatherString = "SUNNY";
-        String high = "12";
-        String low = "5";
+        String mWeatherString;
+        String high;
+        String low;
         Bitmap weatherIcon;
 
         private static final String DESC = "com.example.android.sunshine.app.desc";
@@ -217,6 +217,7 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
             super.onVisibilityChanged(visible);
 
             if (visible) {
+                mGoogleApiClient.connect();
                 registerReceiver();
 
                 // Update time zone in case it changed while we weren't visible.
@@ -224,6 +225,11 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
                 initFormats();
             } else {
                 unregisterReceiver();
+
+                if (mGoogleApiClient != null && mGoogleApiClient.isConnected()) {
+                    Wearable.DataApi.removeListener(mGoogleApiClient, this);
+                    mGoogleApiClient.disconnect();
+                }
             }
 
             // Whether the timer should be running depends on whether we're visible (as well as
@@ -329,7 +335,6 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
         public void onDraw(Canvas canvas, Rect bounds) {
             long now = System.currentTimeMillis();
             mCalendar.setTimeInMillis(now);
-            mDate.setTime(now);
 
             // Draw the background.
             if (isInAmbientMode()) {
@@ -350,18 +355,13 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
             canvas.drawText(calendarText, mTimeXOffset, mDateYOffset, mDateTextPaint);
 
             if (getPeekCardPosition().isEmpty()) {
-                if (mWeatherString == null) {
-                    Log.d(LOG_TAG, "Weather string is null... setting defaults");
-                    mWeatherString = "sunny";
-                    high = "12°";
-                    low = "5°";
-                }
-
                 if (weatherIcon != null) {
                     canvas.drawBitmap(weatherIcon, 0, mWeatherYOffset, mTimeTextPaint);
                 }
-                canvas.drawText(high, mHighXOffset, mWeatherYOffset, mHighTextPaint);
-                canvas.drawText(low, mLowXOffset, mWeatherYOffset, mLowTextPaint);
+                if (high != null && low != null) {
+                    canvas.drawText(high, mHighXOffset, mWeatherYOffset, mHighTextPaint);
+                    canvas.drawText(low, mLowXOffset, mWeatherYOffset, mLowTextPaint);
+                }
             }
         }
 
@@ -399,11 +399,9 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
 
         @Override
         public void onConnected(Bundle bundle) {
-            Log.d(LOG_TAG, "onConnected:  " + bundle);
+            Log.d(LOG_TAG, "onConnected called on watch:  " + bundle);
             Wearable.DataApi.addListener(mGoogleApiClient, Engine.this);
         }
-
-
 
         @Override
         public void onConnectionSuspended(int i) {
@@ -412,70 +410,75 @@ public class SunshineWatchFaceService extends CanvasWatchFaceService {
 
         @Override
         public void onDataChanged(DataEventBuffer dataEventBuffer) {
-            Log.e(LOG_TAG, "data changed");
+            Log.d(LOG_TAG, "data changed");
             for (DataEvent dataEvent : dataEventBuffer) {
                 if (dataEvent.getType() != DataEvent.TYPE_CHANGED) {
                     continue;
                 }
                 if (dataEvent.getDataItem().getUri().getPath().equals("/weather")) {
+                    Log.d(LOG_TAG, "Got weather item!");
                     DataMapItem dataMapItem = DataMapItem.fromDataItem(dataEvent.getDataItem());
-                    Log.d(LOG_TAG, "Got data item:  " + dataMapItem);
-                    Asset iconAsset = dataMapItem.getDataMap().getAsset(ICON);
-                    weatherIcon = loadBitmapFromAsset(iconAsset);
-                    high = dataMapItem.getDataMap().getString(HIGH);
-                    low = dataMapItem.getDataMap().getString(LOW);
-                    mWeatherString = dataMapItem.getDataMap().getString(DESC);
+                    DataMap dataMap = dataMapItem.getDataMap();
+                    Log.d(LOG_TAG, "Got data item:  " + dataMap);
+                    if (dataMap.containsKey(ICON)) {
+                        Asset iconAsset = dataMap.getAsset(ICON);
+                        new LoadBitmapAsyncTask().execute(iconAsset);
+                    }
+                    if (dataMap.containsKey(HIGH)) {
+                        high = dataMapItem.getDataMap().getString(HIGH);
+                    }
+                    if (dataMap.containsKey(LOW)) {
+                        low = dataMapItem.getDataMap().getString(LOW);
+                    }
+                    if (dataMap.containsKey(DESC)) {
+                        mWeatherString = dataMapItem.getDataMap().getString(DESC);
+                    }
+                    Log.d(LOG_TAG, "Updated from weather data!");
+                    invalidate();
                 }
             }
-        }
-
-        private void updateUiFromDataMap(final DataMap config) {
-            boolean uiUpdated = false;
-            for (String configKey : config.keySet()) {
-                if (!config.containsKey(configKey)) {
-                    continue;
-                }
-                String weatherString = config.getString(configKey);
-                if (updateUiForWeatherString(configKey, weatherString)) {
-                    uiUpdated = true;
-                }
-            }
-            if (uiUpdated) invalidate();
-        }
-
-        private boolean updateUiForWeatherString(String configKey, String weatherString) {
-            if (!weatherString.equals(mWeatherString)) {
-                mWeatherString = weatherString;
-                return true;
-            }
-            return false;
         }
 
         @Override
         public void onConnectionFailed(ConnectionResult connectionResult) {
-            Log.d(LOG_TAG, "onConnectionFailed: " + connectionResult);
+            Log.d(LOG_TAG, "onConnectionFailed called on watch: " + connectionResult);
         }
 
-        public Bitmap loadBitmapFromAsset(Asset asset) {
-            if (asset == null) {
-                Log.e(LOG_TAG, "Error:  asset is null");
-                return  null;
-            }
-            ConnectionResult result = mGoogleApiClient.blockingConnect(TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            if (!result.isSuccess()) {
-                Log.w(LOG_TAG, "Connection result failed");
-                return null;
-            }
-            InputStream assetInputStream = Wearable.DataApi.getFdForAsset(
-                    mGoogleApiClient, asset).await().getInputStream();
-            mGoogleApiClient.disconnect();
+        private class LoadBitmapAsyncTask extends AsyncTask<Asset, Void, Bitmap> {
+            @Override
+            protected Bitmap doInBackground(Asset... params) {
+                if (params.length == 0) {
+                    Log.e(LOG_TAG, "Load bitmap task called with 0 params");
+                    return null;
+                }
+                Asset asset = params[0];
+                if (asset == null) {
+                    Log.e(LOG_TAG, "Error:  asset is null");
+                    return  null;
+                }
+                ConnectionResult result = mGoogleApiClient.blockingConnect(TIMEOUT_MS, TimeUnit.MILLISECONDS);
+                if (!result.isSuccess()) {
+                    Log.w(LOG_TAG, "Connection result failed");
+                    return null;
+                }
+                InputStream assetInputStream = Wearable.DataApi.getFdForAsset(
+                        mGoogleApiClient, asset).await().getInputStream();
+                mGoogleApiClient.disconnect();
 
-            if (assetInputStream == null) {
-                Log.w(LOG_TAG, "Requested an unknown asset");
-                return null;
+                if (assetInputStream == null) {
+                    Log.w(LOG_TAG, "Requested an unknown asset");
+                    return null;
+                }
+
+                return BitmapFactory.decodeStream(assetInputStream);
             }
 
-            return BitmapFactory.decodeStream(assetInputStream);
+            @Override
+            protected void onPostExecute(Bitmap bitmap) {
+                super.onPostExecute(bitmap);
+                weatherIcon = bitmap;
+                invalidate();
+            }
         }
     }
 }

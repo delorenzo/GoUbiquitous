@@ -13,8 +13,8 @@
     <dimen name="weather_icon_x_offset_round">0dp</dimen>
     <dimen name="high_x_offset_square">80dp</dimen>
     <dimen name="high_x_offset_round">80dp</dimen>
-    <dimen name="low_x_offset_square">130dp</dimen>
-    <dimen name="low_x_offset_round">130dp</dimen>
+    <dimen name="low_x_offset_square">140dp</dimen>
+    <dimen name="low_x_offset_round">140dp</dimen>
 
     <!-- y offsets -->
     <dimen name="time_y_offset">90dp</dimen>

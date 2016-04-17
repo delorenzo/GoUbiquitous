@@ -39,6 +39,7 @@ import com.example.android.sunshine.app.muzei.WeatherMuzeiSource;
 import com.google.android.gms.common.ConnectionResult;
 import com.google.android.gms.common.api.GoogleApiClient;
 import com.google.android.gms.common.api.PendingResult;
+import com.google.android.gms.common.api.ResultCallback;
 import com.google.android.gms.wearable.Asset;
 import com.google.android.gms.wearable.DataApi;
 import com.google.android.gms.wearable.PutDataMapRequest;
@@ -111,27 +112,27 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
                 .addConnectionCallbacks(new GoogleApiClient.ConnectionCallbacks() {
                     @Override
                     public void onConnected(Bundle connectionHint) {
-                        Log.d(LOG_TAG, "onConnected:  " + connectionHint);
+                        Log.d(LOG_TAG, "onConnected called on phone:  " + connectionHint);
                     }
                     @Override
                     public void onConnectionSuspended(int cause) {
-                        Log.d(LOG_TAG, "onConnectionSuspended:  " + cause);
+                        Log.d(LOG_TAG, "onConnectionSuspended called on phone:  " + cause);
                     }
                 })
                 .addOnConnectionFailedListener(new GoogleApiClient.OnConnectionFailedListener() {
                     @Override
                     public void onConnectionFailed(ConnectionResult result) {
-                        Log.d(LOG_TAG, "onConnectionFailed:  " + result);
+                        Log.d(LOG_TAG, "onConnectionFailed called on phone:  " + result);
                     }
                 })
                 .addApi(Wearable.API)
                 .build();
-        mGoogleApiClient.connect();
     }
 
     @Override
     public void onPerformSync(Account account, Bundle extras, String authority, ContentProviderClient provider, SyncResult syncResult) {
         Log.d(LOG_TAG, "Starting sync");
+        mGoogleApiClient.connect();
 
         // We no longer need just the location String, but also potentially the latitude and
         // longitude, in case we are syncing based on a new Place Picker API result.
@@ -564,15 +565,7 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
             Resources resources = context.getResources();
             int artResourceId = Utility.getArtResourceForWeatherCondition(weatherId);
             String artUrl = Utility.getArtUrlForWeatherCondition(context, weatherId);
-
-            @SuppressLint("InlinedApi")
-            int largeIconWidth = Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB
-                    ? resources.getDimensionPixelSize(android.R.dimen.notification_large_icon_width)
-                    : resources.getDimensionPixelSize(R.dimen.notification_large_icon_default);
-            @SuppressLint("InlinedApi")
-            int largeIconHeight = Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB
-                    ? resources.getDimensionPixelSize(android.R.dimen.notification_large_icon_height)
-                    : resources.getDimensionPixelSize(R.dimen.notification_large_icon_default);
+            int iconSize = resources.getDimensionPixelSize(R.dimen.weather_icon_wearable);
 
             // Retrieve the large icon
             Bitmap largeIcon;
@@ -582,7 +575,7 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
                         .asBitmap()
                         .error(artResourceId)
                         .fitCenter()
-                        .into(largeIconWidth, largeIconHeight).get();
+                        .into(iconSize, iconSize).get();
             } catch (InterruptedException | ExecutionException e) {
                 Log.e(LOG_TAG, "Error retrieving large icon from " + artUrl, e);
                 largeIcon = BitmapFactory.decodeResource(resources, artResourceId);
@@ -600,8 +593,7 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
 
             if (lastHigh != high || lastLow != low || !lastDesc.equals(desc)) {
                 SharedPreferences.Editor editor = prefs.edit();
-                PutDataMapRequest putDataMapRequest = PutDataMapRequest.create(wearableDataItemUri)
-                        .setUrgent();
+                PutDataMapRequest putDataMapRequest = PutDataMapRequest.create(wearableDataItemUri);
                 if (lastLow != low) {
                     putDataMapRequest.getDataMap().putString(LOW,
                             Utility.formatTemperature(context, low));
@@ -619,12 +611,23 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
                     putDataMapRequest.getDataMap().putAsset(ICON, iconAsset);
                     editor.putString(lastDescKey, desc);
                 }
+                putDataMapRequest.setUrgent();
                 PutDataRequest putDataRequest = putDataMapRequest.asPutDataRequest();
                 if (!mGoogleApiClient.isConnected()) {
                     Log.e(LOG_TAG, "Api client not connected");
                 }
                 PendingResult<DataApi.DataItemResult> pendingResult =
                         Wearable.DataApi.putDataItem(mGoogleApiClient, putDataRequest);
+                pendingResult.setResultCallback(new ResultCallback<DataApi.DataItemResult>() {
+                    @Override
+                    public void onResult(final DataApi.DataItemResult result) {
+                        if(result.getStatus().isSuccess()) {
+                            Log.d(LOG_TAG, "Successfully sent data items: " + result.getDataItem().getUri());
+                            //the adapter's work is done so it can disconnect
+                            mGoogleApiClient.disconnect();
+                        }
+                    }
+                });
                 Log.d(LOG_TAG, "Updated wearable");
                 editor.apply();
             }
