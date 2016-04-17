@@ -6,8 +6,8 @@ android {
     buildToolsVersion "23.0.3"
 
     defaultConfig {
-        applicationId "com.jdelorenzo.sunshinewatchface"
-        minSdkVersion 21
+        applicationId "com.example.android.sunshine.app"
+        minSdkVersion 20
         targetSdkVersion 23
         versionCode 1
         versionName "1.0"

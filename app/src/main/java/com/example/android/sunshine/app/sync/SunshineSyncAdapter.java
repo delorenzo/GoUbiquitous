@@ -111,18 +111,22 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
                 .addConnectionCallbacks(new GoogleApiClient.ConnectionCallbacks() {
                     @Override
                     public void onConnected(Bundle connectionHint) {
+                        Log.d(LOG_TAG, "onConnected:  " + connectionHint);
                     }
                     @Override
                     public void onConnectionSuspended(int cause) {
+                        Log.d(LOG_TAG, "onConnectionSuspended:  " + cause);
                     }
                 })
                 .addOnConnectionFailedListener(new GoogleApiClient.OnConnectionFailedListener() {
                     @Override
                     public void onConnectionFailed(ConnectionResult result) {
+                        Log.d(LOG_TAG, "onConnectionFailed:  " + result);
                     }
                 })
                 .addApi(Wearable.API)
                 .build();
+        mGoogleApiClient.connect();
     }
 
     @Override
@@ -403,6 +407,7 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
                 updateWidgets();
                 updateMuzei();
                 notifyWeather();
+                updateWearable();
             }
             Log.d(LOG_TAG, "Sync Complete. " + cVVector.size() + " Inserted");
             setLocationStatus(getContext(), LOCATION_STATUS_OK);
@@ -436,6 +441,7 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
         Context context = getContext();
         //checking the last update and notify if it' the first of the day
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        
         String displayNotificationsKey = context.getString(R.string.pref_enable_notifications_key);
         boolean displayNotifications = prefs.getBoolean(displayNotificationsKey,
                 Boolean.parseBoolean(context.getString(R.string.pref_enable_notifications_default)));
@@ -454,7 +460,7 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
                 // we'll query our contentProvider, as always
                 Cursor cursor = context.getContentResolver().query(weatherUri, NOTIFY_WEATHER_PROJECTION, null, null, null);
 
-                if (cursor.moveToFirst()) {
+                if (cursor != null && cursor.moveToFirst()) {
                     int weatherId = cursor.getInt(INDEX_WEATHER_ID);
                     double high = cursor.getDouble(INDEX_MAX_TEMP);
                     double low = cursor.getDouble(INDEX_MIN_TEMP);
@@ -533,30 +539,99 @@ public class SunshineSyncAdapter extends AbstractThreadedSyncAdapter {
                     SharedPreferences.Editor editor = prefs.edit();
                     editor.putLong(lastNotificationKey, System.currentTimeMillis());
                     editor.commit();
-
-                    updateWearable(desc, largeIcon, high, low);
                 }
                 cursor.close();
             }
         }
     }
 
-    private void updateWearable(String weatherDesc, Bitmap largeIcon, double high, double low) {
+    private void updateWearable() {
         Context context = getContext();
-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+        String locationQuery = Utility.getPreferredLocation(context);
 
-        mGoogleApiClient.connect();
-        //only send the data to the wearable is it has changed.
-        PutDataMapRequest putDataMapRequest = PutDataMapRequest.create(wearableDataItemUri);
-        putDataMapRequest.getDataMap().putString(LOW, Utility.formatTemperature(context, low));
-        putDataMapRequest.getDataMap().putString(HIGH, Utility.formatTemperature(context, high));
-        putDataMapRequest.getDataMap().putString(DESC, weatherDesc);
-        Asset iconAsset = createAssetFromBitmap(largeIcon);
-        putDataMapRequest.getDataMap().putAsset(ICON, iconAsset);
-        PutDataRequest putDataRequest = putDataMapRequest.asPutDataRequest();
-        PendingResult<DataApi.DataItemResult> pendingResult =
-                Wearable.DataApi.putDataItem(mGoogleApiClient, putDataRequest);
-        //mGoogleApiClient.disconnect();
+        Uri weatherUri = WeatherContract.WeatherEntry.buildWeatherLocationWithDate(locationQuery, System.currentTimeMillis());
+
+        // we'll query our contentProvider, as always
+        Cursor cursor = context.getContentResolver().query(weatherUri, NOTIFY_WEATHER_PROJECTION, null, null, null);
+
+        if (cursor != null && cursor.moveToFirst()) {
+            int weatherId = cursor.getInt(INDEX_WEATHER_ID);
+            double high = cursor.getDouble(INDEX_MAX_TEMP);
+            double low = cursor.getDouble(INDEX_MIN_TEMP);
+            String desc = cursor.getString(INDEX_SHORT_DESC);
+
+            int iconId = Utility.getIconResourceForWeatherCondition(weatherId);
+            Resources resources = context.getResources();
+            int artResourceId = Utility.getArtResourceForWeatherCondition(weatherId);
+            String artUrl = Utility.getArtUrlForWeatherCondition(context, weatherId);
+
+            @SuppressLint("InlinedApi")
+            int largeIconWidth = Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB
+                    ? resources.getDimensionPixelSize(android.R.dimen.notification_large_icon_width)
+                    : resources.getDimensionPixelSize(R.dimen.notification_large_icon_default);
+            @SuppressLint("InlinedApi")
+            int largeIconHeight = Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB
+                    ? resources.getDimensionPixelSize(android.R.dimen.notification_large_icon_height)
+                    : resources.getDimensionPixelSize(R.dimen.notification_large_icon_default);
+
+            // Retrieve the large icon
+            Bitmap largeIcon;
+            try {
+                largeIcon = Glide.with(context)
+                        .load(artUrl)
+                        .asBitmap()
+                        .error(artResourceId)
+                        .fitCenter()
+                        .into(largeIconWidth, largeIconHeight).get();
+            } catch (InterruptedException | ExecutionException e) {
+                Log.e(LOG_TAG, "Error retrieving large icon from " + artUrl, e);
+                largeIcon = BitmapFactory.decodeResource(resources, artResourceId);
+            }
+
+            //only send the data to the wearable is it has changed.
+            //additionally, only send the data that HAS changed.
+            SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
+            String lastLowKey = context.getString(R.string.pref_last_low);
+            String lastDescKey = context.getString(R.string.pref_last_desc);
+            String lastHighKey = context.getString(R.string.pref_last_high);
+            double lastHigh = Double.longBitsToDouble(prefs.getLong(lastHighKey, 0));
+            double lastLow = Double.longBitsToDouble(prefs.getLong(lastLowKey, 0));
+            String lastDesc = prefs.getString(lastDescKey, "");
+
+            if (lastHigh != high || lastLow != low || !lastDesc.equals(desc)) {
+                SharedPreferences.Editor editor = prefs.edit();
+                PutDataMapRequest putDataMapRequest = PutDataMapRequest.create(wearableDataItemUri)
+                        .setUrgent();
+                if (lastLow != low) {
+                    putDataMapRequest.getDataMap().putString(LOW,
+                            Utility.formatTemperature(context, low));
+                    editor.putLong(lastLowKey, Double.doubleToRawLongBits(low));
+                }
+                if (lastHigh != high) {
+                    putDataMapRequest.getDataMap().putString(HIGH,
+                            Utility.formatTemperature(context, high));
+                    editor.putLong(lastHighKey, Double.doubleToRawLongBits(high));
+                }
+                //assume that the icon has changed if the desscription changes
+                if (!lastDesc.equals(desc)) {
+                    putDataMapRequest.getDataMap().putString(DESC, desc);
+                    Asset iconAsset = createAssetFromBitmap(largeIcon);
+                    putDataMapRequest.getDataMap().putAsset(ICON, iconAsset);
+                    editor.putString(lastDescKey, desc);
+                }
+                PutDataRequest putDataRequest = putDataMapRequest.asPutDataRequest();
+                if (!mGoogleApiClient.isConnected()) {
+                    Log.e(LOG_TAG, "Api client not connected");
+                }
+                PendingResult<DataApi.DataItemResult> pendingResult =
+                        Wearable.DataApi.putDataItem(mGoogleApiClient, putDataRequest);
+                Log.d(LOG_TAG, "Updated wearable");
+                editor.apply();
+            }
+        }
+        if (cursor != null) {
+            cursor.close();
+        }
     }
 
     private static Asset createAssetFromBitmap(Bitmap bitmap) {
