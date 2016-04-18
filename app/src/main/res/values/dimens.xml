@@ -75,5 +75,5 @@
     <dimen name="forecast_widget_text_width">38dp</dimen>
 
     <!-- dimension for watches -->
-    <dimen name="weather_icon_wearable">20dp</dimen>
+    <dimen name="weather_icon_wearable">40dp</dimen>
 </resources>
